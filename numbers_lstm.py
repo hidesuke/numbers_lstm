@@ -1,4 +1,6 @@
 # -*- encoding:utf-8 -*-
+import argparse
+import os
 import chainer
 import chainer.functions as F
 import chainer.links as L
@@ -10,6 +12,7 @@ import cPickle as pickle
 from chainer import cuda
 from chainer import optimizers
 from chainer import serializers
+from chainer import link
 
 
 class Network(chainer.Chain):
@@ -65,10 +68,41 @@ class Network(chainer.Chain):
         self.embed.gW = np.r_[self.embed.gW, add_gW]
 
 
+# gotten from http://qiita.com/tabe2314/items/6c0c1b769e12ab1e2614
+def copy_model(src, dst):
+    assert isinstance(src, link.Chain)
+    assert isinstance(dst, link.Chain)
+    for child in src.children():
+        if child.name not in dst.__dict__:
+            continue
+        dst_child = dst[child.name]
+        if type(child) != type(dst_child):
+            continue
+        if isinstance(child, link.Chain):
+            copy_model(child, dst_child)
+        if isinstance(child, link.Link):
+            match = True
+            for a, b in zip(child.namedparams(), dst_child.namedparams()):
+                if a[0] != b[0]:
+                    match = False
+                    break
+                if a[1].data.shape != b[1].data.shape:
+                    match = False
+                    break
+            if not match:
+                print 'Ignore {0} because of parameter mismatch'.format(child.name)
+                continue
+            for a, b in zip(child.namedparams(), dst_child.namedparams()):
+                b[1].data = a[1].data
+            print 'Copy {0}'.format(child.name)
+
+
 def train(
+    output_path,
     train_data,
     words,
     vocab,
+    pretrained_vocab_size=0,
     gpu=-1,
     n_epoch=100,
     rnn_size=128,
@@ -84,13 +118,19 @@ def train(
 
     xp = cuda.cupy if gpu >= 0 else np
 
-    pickle.dump(vocab, open('./output/vocab2.bin', 'wb'))
-
     # Prepare model
-    # TODO: train=False??? True???
     lm = Network(len(vocab), rnn_size, dropout_ratio=dropout, train=True)
     model = L.Classifier(lm)
     model.compute_accuracy = False  # we only want the perplexity
+
+    # load pre-trained model
+    pretrained_model_path = os.path.join(output_path, 'model.npz')
+    if os.path.exists(pretrained_model_path):
+        lm2 = Network(pretrained_vocab_size, rnn_size, dropout_ratio=dropout, train=True)
+        model2 = L.Classifier(lm2)
+        model2.compute_accuracy = False
+        serializers.load_npz(pretrained_model_path, model2)
+        copy_model(model2, model)
 
     # Setup optimizer
     optimizer = optimizers.RMSprop(lr=learning_rate, alpha=decay_rate, eps=1e-8)
@@ -143,9 +183,9 @@ def train(
                 optimizer.lr /= 1.2
                 print 'learning rate = {:.10f}'.format(optimizer.lr)
             # Save the model and the optimizer
-            serializers.save_npz('./output/model%04d' % epoch, model)
+            serializers.save_npz('{}/model.npz'.format(output_path), model)
             print '--- epoch: {} ------------------------'.format(epoch)
-            serializers.save_npz('./output/rnnlm.state', optimizer)
+            serializers.save_npz('{}/rnnlm.state.npz'.format(output_path), optimizer)
 
     print '===== finish train. ====='
 
@@ -154,32 +194,51 @@ def train(
 
 def prepare(
     csv_file_path,
-    pretrained_vocab_path=None,
+    pretrained_vocab=None,
+    type='n4'
 ):
     vocab = {}
+    pretrained_vocab_size = 0
+    if pretrained_vocab and os.path.exists(pretrained_vocab):
+        vocab = pickle.load(open(pretrained_vocab, 'rb'))
+        pretrained_vocab_size = len(vocab)
     words = []
     with open(csv_file_path) as csv:
         for line in csv:
-            words.append(csv_to_number(line))
+            words.extend(csv_to_number(line, type))
     dataset = np.ndarray((len(words),), dtype=np.int32)
     for i, word in enumerate(words):
         if word not in vocab:
             vocab[word] = len(vocab)
         dataset[i] = vocab[word]
-    return dataset, words, vocab
+    pickle.dump(vocab, open(pretrained_vocab, 'wb'))
+    return dataset, words, vocab, pretrained_vocab_size
 
 
-def csv_to_number(csv_line):
+def csv_to_number(csv_line, type):
     arr = csv_line.split(',')
-    return '{}{}{}{}'.format(arr[0], arr[1], arr[2], arr[3])
+    if type == 'n4':
+        return '{}{}{}{}'.format(arr[0], arr[1], arr[2], arr[3])
+    elif type == 'n4_one_by_one':
+        return arr[0:4]
+    elif type == 'n3':
+        return '{}{}{}'.format(arr[0], arr[1], arr[2])
+    elif type == 'n3_one_by_one':
+        return arr[0:3]
 
 
-def main():
-    csv_path = './data/N4.csv'
-    dataset, words, vocab = prepare(csv_path)
-    train(dataset, words, vocab, n_epoch=1000)
-    return
-
-
+'''
+CSVファイルは1行の長さが不定長。ただし、最初のN桁が数値。
+ナンバーズ4であれば 1,2,3,4,,,のようなのが1レコード。5番目以降の数値は捨てる
+'''
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description="Trainer for Numbers")
+    parser.add_argument('--src', '-s', default='./data/N4.csv')
+    parser.add_argument('--out', '-o', default='./output')
+    parser.add_argument('--epoch', '-e', default=100)
+    parser.add_argument('--gpu', '-g', default=-1)
+    args = parser.parse_args()
+
+    dataset, words, vocab, pretrained_vocab_size = prepare(args.src, os.path.join(args.out, 'vocab2.bin'))
+    train(args.out, dataset, words, vocab, pretrained_vocab_size=pretrained_vocab_size, n_epoch=args.epoch)
+
