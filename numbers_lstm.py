@@ -250,7 +250,7 @@ def prepare(
             words.append(csv_to_number(line, type))
     if type in ['n4_one_by_one', 'n3_one_by_one']:
         temp = []
-        for word in temp:
+        for word in words:
             temp.extend(word)
             temp.append('<eos>')
         words = temp
