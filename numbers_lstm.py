@@ -324,7 +324,7 @@ CSVファイルは1行の長さが不定長。ただし、最初のN桁が数値
 ナンバーズ4であれば 1,2,3,4,,,のようなのが1レコード。5番目以降の数値は捨てる
 '''
 if __name__ == '__main__':
-    prepare_train_predict('./data/N4.csv', './output/n4/vocab2.bin', './output/n4', 10, 'n4')
-    prepare_train_predict('./data/N4.csv', './output/n4_1x1/vocab2.bin', './output/n4_1x1', 400, 'n4_one_by_one')
+    prepare_train_predict('./data/N4.csv', './output/n4/vocab2.bin', './output/n4', 100, 'n4')
+    prepare_train_predict('./data/N4.csv', './output/n4_1x1/vocab2.bin', './output/n4_1x1', 100, 'n4_one_by_one')
 
 
