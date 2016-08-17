@@ -275,7 +275,7 @@ def csv_to_number(csv_line, type):
         return arr[0:3]
 
 
-def write_to_file(out_dir, result, type):
+def write_to_file(primetext, out_dir, result, type):
     with open(os.path.join(out_dir, 'result.txt'), 'w') as result_txt:
         result_txt.write('--------------------\n')
         result_txt.write('type: ' + type + '\n')
@@ -311,7 +311,7 @@ def prepare_train_predict(src, pretrained_vocab, out_dir, epoch, type):
         primetext,
         int(random.random() + 10000)
     )
-    write_to_file(out_dir, result, type)
+    write_to_file(primetext, out_dir, result, type)
 
 
 def get_numbers_latest_result():
