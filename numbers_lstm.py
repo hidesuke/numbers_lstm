@@ -1,6 +1,6 @@
 # -*- encoding:utf-8 -*-
-import argparse
 import os
+import random
 import chainer
 import chainer.functions as F
 import chainer.links as L
@@ -13,6 +13,7 @@ from chainer import cuda
 from chainer import optimizers
 from chainer import serializers
 from chainer import link
+from chainer import Variable
 
 
 class Network(chainer.Chain):
@@ -170,7 +171,7 @@ def train(
             now = time.time()
             throuput = 10000. / (now - cur_at)
             perp = math.exp(float(cur_log_perp) / 10000)
-            print 'iter {} training perplexity: {:.2f} ({:.2f} iters/sec)'.format(i + 1, perp, throuput)
+            print 'epoch {} iter {} training perplexity: {:.2f} ({:.2f} iters/sec)'.format(epoch, i + 1, perp, throuput)
             cur_at = now
             cur_log_perp.fill(0)
 
@@ -184,12 +185,53 @@ def train(
                 print 'learning rate = {:.10f}'.format(optimizer.lr)
             # Save the model and the optimizer
             serializers.save_npz('{}/model.npz'.format(output_path), model)
-            print '--- epoch: {} ------------------------'.format(epoch)
             serializers.save_npz('{}/rnnlm.state.npz'.format(output_path), optimizer)
 
     print '===== finish train. ====='
 
-# prepare =========================================
+
+def predict(type, model_path, vocab_path, primetext, seed,
+            length=40, unit=128, dropout=0.0, sample=1.0):
+
+    np.random.seed(seed)
+
+    # load vocabulary
+    vocab = pickle.load(open(vocab_path, 'rb'))
+    ivocab = {}
+    for c, i in vocab.items():
+        ivocab[i] = c
+    n_units = unit
+
+    lm = Network(len(vocab), n_units, dropout_ratio=dropout, train=False)
+    model = L.Classifier(lm)
+    model.compute_accuracy = False  # we only want the perplexity
+
+    serializers.load_npz(model_path, model)
+    model.predictor.reset_state()  # initialize state
+    prev_char = np.array([0])
+    ret = []
+    if not isinstance(primetext, unicode):
+        primetext = unicode(primetext, 'utf-8')
+    ret.append(primetext)
+    prev_char = Variable(np.ones((1,)).astype(np.int32) * vocab[primetext])
+    prob = model.predictor.predict(prev_char)
+
+    for i in xrange(length):
+        prob = model.predictor.predict(prev_char)
+
+        if sample > 0:
+            probability = cuda.to_cpu(prob.data)[0].astype(np.float64)
+            probability /= np.sum(probability)
+            index = np.random.choice(range(len(probability)), p=probability)
+        else:
+            index = np.argmax(cuda.to_cpu(prob.data))
+
+        if ivocab[index] == "<eos>":
+            ret.append(".")
+        else:
+            ret.append(ivocab[index])
+        prev_char = Variable(np.ones((1,)).astype(np.int32) * vocab[ivocab[index]])
+    return ret
 
 
 def prepare(
@@ -205,7 +247,13 @@ def prepare(
     words = []
     with open(csv_file_path) as csv:
         for line in csv:
-            words.extend(csv_to_number(line, type))
+            words.append(csv_to_number(line, type))
+    if type in ['n4_one_by_one', 'n3_one_by_one']:
+        temp = []
+        for word in temp:
+            temp.extend(word)
+            temp.append('<eos>')
+        words = temp
     dataset = np.ndarray((len(words),), dtype=np.int32)
     for i, word in enumerate(words):
         if word not in vocab:
@@ -227,18 +275,32 @@ def csv_to_number(csv_line, type):
         return arr[0:3]
 
 
+def prepare_train_predict(src, pretrained_vocab, out_dir, epoch, type):
+    vocab_file_path = os.path.join(out_dir, 'vocab2.bin')
+    dataset, words, vocab, pretrained_vocab_size = prepare(src, vocab_file_path, type)
+    primetext = words[-1]
+    train(out_dir, dataset, words, vocab, pretrained_vocab_size=pretrained_vocab_size, n_epoch=epoch)
+    result = predict(
+        type,
+        os.path.join(out_dir, 'model.npz'),
+        vocab_file_path,
+        primetext,
+        int(random.random() + 10000)
+    )
+    with open(os.path.join(out_dir, 'result.txt'), 'w') as result_txt:
+        result_txt.write('--------------------\n')
+        result_txt.write('type: ' + type + '\n')
+        result_txt.write('primetext: ' + primetext + '\n')
+        result_txt.write('\n'.join(result))
+    print '\n'.join(result)
+
+
 '''
 CSVファイルは1行の長さが不定長。ただし、最初のN桁が数値。
 ナンバーズ4であれば 1,2,3,4,,,のようなのが1レコード。5番目以降の数値は捨てる
 '''
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Trainer for Numbers")
-    parser.add_argument('--src', '-s', default='./data/N4.csv')
-    parser.add_argument('--out', '-o', default='./output')
-    parser.add_argument('--epoch', '-e', default=100)
-    parser.add_argument('--gpu', '-g', default=-1)
-    args = parser.parse_args()
+    prepare_train_predict('./data/N4.csv', './output/n4/vocab2.bin', './output/n4', 100, 'n4')
+    prepare_train_predict('./data/N4.csv', './output/n4_1x1/vocab2.bin', './output/n4_1x1', 100, 'n4_one_by_one')
 
-    dataset, words, vocab, pretrained_vocab_size = prepare(args.src, os.path.join(args.out, 'vocab2.bin'))
-    train(args.out, dataset, words, vocab, pretrained_vocab_size=pretrained_vocab_size, n_epoch=args.epoch)
 
