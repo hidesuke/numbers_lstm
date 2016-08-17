@@ -275,10 +275,34 @@ def csv_to_number(csv_line, type):
         return arr[0:3]
 
 
+def write_to_file(out_dir, result, type):
+    with open(os.path.join(out_dir, 'result.txt'), 'w') as result_txt:
+        result_txt.write('--------------------\n')
+        result_txt.write('type: ' + type + '\n')
+        result_txt.write('primetext: ' + primetext + '\n')
+        if type in ['n4_one_by_one', 'n3_one_by_one']:
+            buf = ''
+            for word in result:
+                if word == '.':
+                    buf += '\n'
+                else:
+                    buf += word
+            result_txt.write(buf)
+            print buf
+        else:
+            result_txt.write('\n'.join(result))
+            print '\n'.join(result)
+
+
 def prepare_train_predict(src, pretrained_vocab, out_dir, epoch, type):
     vocab_file_path = os.path.join(out_dir, 'vocab2.bin')
     dataset, words, vocab, pretrained_vocab_size = prepare(src, vocab_file_path, type)
-    primetext = words[-1]
+    index = 1
+    while True:
+        primetext = words[-index]
+        if primetext != '<eos>':
+            break
+        index += 1
     train(out_dir, dataset, words, vocab, pretrained_vocab_size=pretrained_vocab_size, n_epoch=epoch)
     result = predict(
         type,
@@ -287,20 +311,20 @@ def prepare_train_predict(src, pretrained_vocab, out_dir, epoch, type):
         primetext,
         int(random.random() + 10000)
     )
-    with open(os.path.join(out_dir, 'result.txt'), 'w') as result_txt:
-        result_txt.write('--------------------\n')
-        result_txt.write('type: ' + type + '\n')
-        result_txt.write('primetext: ' + primetext + '\n')
-        result_txt.write('\n'.join(result))
-    print '\n'.join(result)
+    write_to_file(out_dir, result, type)
 
+
+def get_numbers_latest_result():
+    # http://www.takarakujinet.co.jp/numbers4/index2.html
+    # http://www.takarakujinet.co.jp/numbers3/index2.html
+    return
 
 '''
 CSVファイルは1行の長さが不定長。ただし、最初のN桁が数値。
 ナンバーズ4であれば 1,2,3,4,,,のようなのが1レコード。5番目以降の数値は捨てる
 '''
 if __name__ == '__main__':
-    prepare_train_predict('./data/N4.csv', './output/n4/vocab2.bin', './output/n4', 100, 'n4')
-    prepare_train_predict('./data/N4.csv', './output/n4_1x1/vocab2.bin', './output/n4_1x1', 100, 'n4_one_by_one')
+    prepare_train_predict('./data/N4.csv', './output/n4/vocab2.bin', './output/n4', 10, 'n4')
+    prepare_train_predict('./data/N4.csv', './output/n4_1x1/vocab2.bin', './output/n4_1x1', 400, 'n4_one_by_one')
 
 
