@@ -1,6 +1,7 @@
 # -*- encoding:utf-8 -*-
 import os
 import random
+import datetime
 import chainer
 import chainer.functions as F
 import chainer.links as L
@@ -8,12 +9,18 @@ import numpy as np
 import time
 import math
 import six
+import smtplib
+from email.mime.text import MIMEText
 import cPickle as pickle
 from chainer import cuda
 from chainer import optimizers
 from chainer import serializers
 from chainer import link
 from chainer import Variable
+
+import urllib2
+import xlrd
+import chardet
 
 
 class Network(chainer.Chain):
@@ -103,6 +110,7 @@ def train(
     train_data,
     words,
     vocab,
+    fine_tuning=True,
     pretrained_vocab_size=0,
     gpu=-1,
     n_epoch=100,
@@ -126,7 +134,7 @@ def train(
 
     # load pre-trained model
     pretrained_model_path = os.path.join(output_path, 'model.npz')
-    if os.path.exists(pretrained_model_path):
+    if fine_tuning and os.path.exists(pretrained_model_path):
         lm2 = Network(pretrained_vocab_size, rnn_size, dropout_ratio=dropout, train=True)
         model2 = L.Classifier(lm2)
         model2.compute_accuracy = False
@@ -237,18 +245,19 @@ def predict(type, model_path, vocab_path, primetext, seed,
 def prepare(
     csv_file_path,
     pretrained_vocab=None,
-    type='n4'
+    type='n4',
+    fine_tuning=True
 ):
     vocab = {}
     pretrained_vocab_size = 0
-    if pretrained_vocab and os.path.exists(pretrained_vocab):
+    if fine_tuning and pretrained_vocab and os.path.exists(pretrained_vocab):
         vocab = pickle.load(open(pretrained_vocab, 'rb'))
         pretrained_vocab_size = len(vocab)
     words = []
     with open(csv_file_path) as csv:
         for line in csv:
             words.append(csv_to_number(line, type))
-    if type in ['n4_one_by_one', 'n3_one_by_one']:
+    if type in ['n4_one_by_one', 'n3_one_by_one', 'l6']:
         temp = []
         for word in words:
             temp.extend(word)
@@ -273,6 +282,8 @@ def csv_to_number(csv_line, type):
         return '{}{}{}'.format(arr[0], arr[1], arr[2])
     elif type == 'n3_one_by_one':
         return arr[0:3]
+    elif type == 'l6':
+        return arr[0:6]
 
 
 def write_to_file(primetext, out_dir, result, type):
@@ -280,13 +291,16 @@ def write_to_file(primetext, out_dir, result, type):
         result_txt.write('--------------------\n')
         result_txt.write('type: ' + type + '\n')
         result_txt.write('primetext: ' + primetext + '\n')
-        if type in ['n4_one_by_one', 'n3_one_by_one']:
+        if type in ['n4_one_by_one', 'n3_one_by_one', 'l6']:
             buf = ''
             for word in result:
                 if word == '.':
                     buf += '\n'
                 else:
-                    buf += word
+                    if type == 'l6':
+                        buf += ',' + word
+                    else:
+                        buf += word
             result_txt.write(buf)
             print buf
         else:
@@ -294,16 +308,16 @@ def write_to_file(primetext, out_dir, result, type):
             print '\n'.join(result)
 
 
-def prepare_train_predict(src, pretrained_vocab, out_dir, epoch, type):
+def prepare_train_predict(src, pretrained_vocab, out_dir, epoch, type, fine_tuning=True):
     vocab_file_path = os.path.join(out_dir, 'vocab2.bin')
-    dataset, words, vocab, pretrained_vocab_size = prepare(src, vocab_file_path, type)
+    dataset, words, vocab, pretrained_vocab_size = prepare(src, vocab_file_path, type, fine_tuning=fine_tuning)
     index = 1
     while True:
         primetext = words[-index]
         if primetext != '<eos>':
             break
         index += 1
-    train(out_dir, dataset, words, vocab, pretrained_vocab_size=pretrained_vocab_size, n_epoch=epoch)
+    train(out_dir, dataset, words, vocab, pretrained_vocab_size=pretrained_vocab_size, n_epoch=epoch, fine_tuning=fine_tuning)
     result = predict(
         type,
         os.path.join(out_dir, 'model.npz'),
@@ -314,17 +328,49 @@ def prepare_train_predict(src, pretrained_vocab, out_dir, epoch, type):
     write_to_file(primetext, out_dir, result, type)
 
 
+def download_data(data_path):
+    xls_source = urllib2.urlopen('http://r7-yosou.hippy.jp/T-data.xls')
+    with open(data_path, 'wb') as xls_file:
+        xls_file.write(xls_source.read())
+
+
+def make_csv_data():
+    xls = xlrd.open_workbook('./data/data.xls')
+    num_sheets = xls.nsheets
+    for sheet_idx in range(num_sheets):
+        sheet = xls.sheet_by_index(sheet_idx)
+        with open(os.path.join('data', sheet.name + '.csv'), 'w') as csv:
+            for row in range(sheet.nrows):
+                for col in range(sheet.ncols):
+                    try:
+                        csv.write(str(int(sheet.cell(row, col).value)) + ',')
+                    except:
+                        pass
+                csv.write('\n')
+
+
 def get_numbers_latest_result():
-    # http://www.takarakujinet.co.jp/numbers4/index2.html
-    # http://www.takarakujinet.co.jp/numbers3/index2.html
-    return
+    data_path = os.path.join('data', 'data.xls')
+    if os.path.exists(data_path):
+        file_timestamp = datetime.datetime.fromtimestamp(os.stat(data_path).st_mtime).strftime('%Y-%m-%d')
+        today = datetime.datetime.now().strftime('%Y-%m-%d')
+        if today > file_timestamp:
+            download_data(data_path)
+    else:
+        download_data(data_path)
+
 
 '''
 CSVファイルは1行の長さが不定長。ただし、最初のN桁が数値。
 ナンバーズ4であれば 1,2,3,4,,,のようなのが1レコード。5番目以降の数値は捨てる
 '''
 if __name__ == '__main__':
-    prepare_train_predict('./data/N4.csv', './output/n4/vocab2.bin', './output/n4', 100, 'n4')
-    prepare_train_predict('./data/N4.csv', './output/n4_1x1/vocab2.bin', './output/n4_1x1', 100, 'n4_one_by_one')
+    # get_numbers_latest_result()
+    prepare_train_predict('./data/N4.csv', './output/n4_ft/vocab2.bin', './output/n4_ft', 1000, 'n4')
+    prepare_train_predict('./data/N4.csv', './output/n4_1x1_ft/vocab2.bin', './output/n4_1x1_ft', 1000, 'n4_one_by_one')
+    prepare_train_predict('./data/N4.csv', './output/n4/vocab2.bin', './output/n4', 1000, 'n4', fine_tuning=False)
+    prepare_train_predict('./data/N4.csv', './output/n4_1x1/vocab2.bin', './output/n4_1x1', 1000, 'n4_one_by_one', fine_tuning=False)
+    prepare_train_predict('./data/L6.csv', './output/l6/vocab2.bin', './output/l6/', 2000, 'l6', fine_tuning=False)
+
 
 
