@@ -283,7 +283,9 @@ def csv_to_number(csv_line, type):
     elif type == 'n3_one_by_one':
         return arr[0:3]
     elif type == 'l6':
-        return arr[0:6]
+        arr = arr[0:6]
+        random.shuffle(arr)
+        return arr
 
 
 def write_to_file(primetext, out_dir, result, type):
